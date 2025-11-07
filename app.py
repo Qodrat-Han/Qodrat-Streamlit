@@ -1,4 +1,6 @@
-# app.py
+# =====================================
+# 🚗 app.py — Prediksi Harga Mobil + Chat AI (Final Fix)
+# =====================================
 import streamlit as st
 import pickle
 import pandas as pd
@@ -17,35 +19,30 @@ st.set_page_config(
 
 st.markdown(
     "<h1 style='text-align:center; color:#0d6efd;'>🚗 Prediksi Harga Mobil + Chat AI</h1>"
-    "<p style='text-align:center; color:gray;'>Interaktif dengan AI — prediksi harga & konsultasi tanpa reload!</p>",
+    "<p style='text-align:center; color:gray;'>Prediksi harga mobil & konsultasi langsung dengan AI — tanpa reload!</p>",
     unsafe_allow_html=True
 )
 
 # =====================================
-# KONFIGURASI GEMINI (AUTO TANPA INPUT)
+# KONFIGURASI GEMINI API (OTOMATIS)
 # =====================================
-# Simpan API Key kamu di file .env atau environment sistem
-# Contoh di terminal:
-#    setx GEMINI_API_KEY "apikey_kamu"
-api_key = os.getenv("GEMINI_API_KEY")
-
+api_key = os.getenv("GEMINI_API_KEY", "")
 if not api_key:
-    st.error("⚠️ API Key Gemini belum ditemukan. Set environment variable `GEMINI_API_KEY` terlebih dahulu.")
+    st.error("⚠️ API Key tidak ditemukan di environment. Tambahkan variabel GEMINI_API_KEY terlebih dahulu.")
 else:
     genai.configure(api_key=api_key)
 
 # =====================================
 # SESSION STATE
 # =====================================
-for key in ["messages", "prediction_result", "last_car"]:
-    if key not in st.session_state:
-        st.session_state[key] = [] if key == "messages" else ({} if key == "last_car" else None)
-
-if "gemini_chat" not in st.session_state and api_key:
-    try:
-        st.session_state.gemini_chat = genai.GenerativeModel("models/gemini-2.5-flash").start_chat(history=[])
-    except Exception as e:
-        st.error(f"Gagal inisialisasi chat Gemini: {e}")
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "prediction_result" not in st.session_state:
+    st.session_state.prediction_result = None
+if "last_car" not in st.session_state:
+    st.session_state.last_car = None
+if "proactive_done" not in st.session_state:
+    st.session_state.proactive_done = False
 
 # =====================================
 # LOAD MODEL PREDIKSI
@@ -60,19 +57,6 @@ try:
 except Exception as e:
     st.error(f"Gagal memuat model.pkl: {e}")
     model = None
-
-# =====================================
-# SIDEBAR (HANYA INFO)
-# =====================================
-with st.sidebar:
-    st.header("ℹ️ Informasi")
-    if api_key:
-        st.success("✅ Gemini API aktif")
-    else:
-        st.warning("⚠️ Gemini API belum diatur")
-
-    st.markdown("---")
-    st.caption("💬 Contoh pertanyaan:\n- Tips jual cepat?\n- Bandingkan model lain.\n- Mengapa harga mobil saya segitu?")
 
 # =====================================
 # FORM INPUT MOBIL
@@ -105,9 +89,11 @@ with st.expander("📋 Form Input Data Mobil", expanded=True):
                     "mpg": mpg,
                     "engineSize": engineSize
                 }])
+
                 harga_pound = float(model.predict(df)[0])
                 harga_rupiah = harga_pound * 19500
 
+                # Simpan detail mobil
                 st.session_state.last_car = {
                     "model": model_name,
                     "year": year,
@@ -121,13 +107,25 @@ with st.expander("📋 Form Input Data Mobil", expanded=True):
                     "harga_pound": harga_pound
                 }
 
-                emoji = "💸" if harga_rupiah < 200_000_000 else "💰" if harga_rupiah < 500_000_000 else "🚀"
+                emoji = "💸" if harga_rupiah < 200_000_000 else ("💰" if harga_rupiah < 500_000_000 else "🚀")
                 hasil = f"{emoji} **Prediksi harga mobil:** Rp {harga_rupiah:,.0f} (≈ £{harga_pound:,.0f})"
                 st.session_state.prediction_result = hasil
                 st.success(hasil)
 
+                # Reset AI proaktif supaya muncul lagi hanya 1x
+                st.session_state.proactive_done = False
+
             except Exception as e:
                 st.error(f"Gagal memprediksi: {e}")
+
+# =====================================
+# INISIALISASI CHAT GEMINI
+# =====================================
+if "gemini_chat" not in st.session_state and api_key:
+    try:
+        st.session_state.gemini_chat = genai.GenerativeModel("models/gemini-2.5-flash").start_chat(history=[])
+    except Exception as e:
+        st.error(f"Gagal inisialisasi chat Gemini: {e}")
 
 # =====================================
 # CHAT INTERAKTIF
@@ -153,29 +151,55 @@ def render_chat():
 
 render_chat()
 
-if prompt := st.chat_input("Tanyakan tentang mobil atau harga..."):
+prompt = st.chat_input("Tanyakan tentang mobil atau harga...")
+
+# =====================================
+# LOGIKA CHAT USER
+# =====================================
+if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
-    render_chat()
 
     if not api_key:
         reply = "⚠️ Gemini belum aktif. Tambahkan API key di environment sistem."
     else:
         placeholder = st.empty()
-        placeholder.markdown(f"<i style='color:gray;'>🤖 AI sedang mengetik...</i>", unsafe_allow_html=True)
-        time.sleep(1.2)
-
+        placeholder.markdown("<i style='color:gray;'>🤖 AI sedang mengetik...</i>", unsafe_allow_html=True)
+        time.sleep(1)
         try:
             chat = st.session_state.gemini_chat
             context = f"""
 Prediksi terakhir: {st.session_state.prediction_result or 'Belum ada prediksi.'}
 Detail mobil: {st.session_state.last_car}
-Instruksi: Jawab dengan ramah, jelas, dan relevan.
+Instruksi: Jawab dengan ramah, jelas, dan informatif.
 """
             response = chat.send_message(f"{context}\nPengguna bertanya: {prompt}")
             reply = response.text
         except Exception as e:
             reply = f"⚠️ Terjadi kesalahan: {e}"
-
-        st.session_state.messages.append({"role": "assistant", "content": reply})
         placeholder.empty()
-        render_chat()
+
+    st.session_state.messages.append({"role": "assistant", "content": reply})
+    st.rerun()
+
+# =====================================
+# AI PROAKTIF (HANYA SEKALI & TANPA DOBEL)
+# =====================================
+if (
+    st.session_state.last_car
+    and "gemini_chat" in st.session_state
+    and not st.session_state.proactive_done
+    and not prompt  # hindari proaktif saat user kirim pesan
+):
+    try:
+        car = st.session_state.last_car
+        proactive_prompt = f"""
+Mobil: {car['model']} ({car['year']}), {car['transmission']}, Mileage {car['mileage']} km.
+Harga prediksi: Rp {car['harga_rupiah']:,.0f}.
+Berikan insight tambahan, tips, atau saran perawatan agar harga jual optimal.
+"""
+        proactive_reply = st.session_state.gemini_chat.send_message(proactive_prompt).text
+        st.session_state.messages.append({"role": "assistant", "content": proactive_reply})
+        st.session_state.proactive_done = True
+        st.rerun()  # tampilkan 1x saja
+    except Exception as e:
+        st.warning(f"AI proaktif gagal: {e}")
